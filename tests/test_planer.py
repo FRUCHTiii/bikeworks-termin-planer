@@ -343,7 +343,7 @@ class TestBackfill:
 
     def test_reihenfolge_innerhalb_passender_kandidaten(self, cfg_default, montag):
         """Bei mehreren passenden Kandidaten gewinnt der mit niedrigerem Index
-        (= hoechste Auftragsnummer = neuester)."""
+        (= niedrigste Auftragsnummer = aeltester)."""
         # Mo 9-11 = 2h. Reihenfolge:
         # #5 (1.5h), #4 (0.5h), #3 (0.5h)
         # #5 nimmt 9-10:30. Rest 30 Min. Beide #4 und #3 passen.

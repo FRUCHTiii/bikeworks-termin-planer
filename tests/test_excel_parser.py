@@ -61,9 +61,9 @@ class TestExcelEinlesen:
         )
         auftraege = excel_einlesen(pfad)
         assert len(auftraege) == 2
-        # Sortiert absteigend nach Auftragsnummer
-        assert auftraege[0].nummer == 101
-        assert auftraege[1].nummer == 100
+        # Sortiert aufsteigend nach Auftragsnummer
+        assert auftraege[0].nummer == 100
+        assert auftraege[1].nummer == 101
 
     def test_dauer_komma_dezimal(self, tmp_path):
         """Easywerkstatt kann '0,5' statt '0.5' enthalten."""
@@ -159,10 +159,10 @@ class TestEchteFixture:
         auftraege = excel_einlesen(FIXTURES / "invoices.xlsx")
         assert len(auftraege) > 0
 
-    def test_sortierung_absteigend_nach_nummer(self):
+    def test_sortierung_aufsteigend_nach_nummer(self):
         auftraege = excel_einlesen(FIXTURES / "invoices.xlsx")
         nummern = [a.nummer for a in auftraege]
-        assert nummern == sorted(nummern, reverse=True)
+        assert nummern == sorted(nummern)
 
     def test_alle_auftraege_haben_gueltige_dauer(self):
         """Egal ob Zeit-Notiz vorhanden oder nicht: jede Dauer ist positiv."""

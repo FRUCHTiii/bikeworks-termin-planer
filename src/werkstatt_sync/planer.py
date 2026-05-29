@@ -76,8 +76,8 @@ def plane_auftraege(
 
     Strategie: FIFO mit Backfill.
 
-    1. Die Auftrags-Reihenfolge wird grundsaetzlich respektiert (hoechste Nummer
-       = neueste = zuerst). Der naechste passende Auftrag wird in den naechsten
+    1. Die Auftrags-Reihenfolge wird grundsaetzlich respektiert (niedrigste Nummer
+       = aelteste = zuerst). Der naechste passende Auftrag wird in den naechsten
        freien Platz gelegt.
     2. WENN der naechste Auftrag NICHT in die Restzeit eines Slots passt, sucht
        der Planer in den nachfolgenden Auftraegen einen, der passt (Backfill).
@@ -137,8 +137,8 @@ def _waehle_naechsten_auftrag(
 ) -> int | None:
     """Sucht den ersten nicht-erledigten Auftrag, der in max_dauer passt.
 
-    "Erster" = niedrigster Index = hoechste Auftragsnummer (Liste ist
-    absteigend sortiert). Damit bleibt die Reihenfolge so weit wie moeglich
+    "Erster" = niedrigster Index = niedrigste Auftragsnummer (Liste ist
+    aufsteigend sortiert). Damit bleibt die Reihenfolge so weit wie moeglich
     erhalten - es wird nur uebersprungen, wenn der naechste Auftrag schlicht
     nicht mehr passt.
     """

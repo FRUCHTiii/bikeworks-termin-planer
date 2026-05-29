@@ -25,7 +25,7 @@ class Auftrag:
 def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list[Auftrag]:
     """Liest Easywerkstatt-Excel und gibt Auftragsliste zurueck.
 
-    Sortiert nach Auftragsnummer absteigend (hoechste = neueste zuerst).
+    Sortiert nach Auftragsnummer aufsteigend (niedrigste = aelteste zuerst).
     Auftraege ohne Zeit-Notiz bekommen default_dauer_stunden.
 
     Wirft FileNotFoundError oder ValueError bei Problemen.
@@ -43,7 +43,7 @@ def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list
 
     df = df[df["Auftragsnummer"].notna()].copy()
     df["Auftragsnummer"] = df["Auftragsnummer"].astype(int)
-    df = df.sort_values("Auftragsnummer", ascending=False)
+    df = df.sort_values("Auftragsnummer", ascending=True)
 
     auftraege = []
     for _, row in df.iterrows():
