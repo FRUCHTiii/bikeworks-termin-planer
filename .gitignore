@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.spec.bak
+
+# Sensible Daten - NIEMALS ins Repo!
+credentials.json
+token.json
+token.pickle
+*.json.bak
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Virtuelle Umgebungen
+venv/
+env/
+.venv/
+
+# Test-Output
+test_output/
+*.log

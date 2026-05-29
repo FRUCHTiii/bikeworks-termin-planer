@@ -1,0 +1,121 @@
+name: CI / Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # =========================================================================
+  # Schneller Quality-Job: laeuft auf jedem Push und PR, plattformunabhaengig
+  # =========================================================================
+  quality:
+    name: Lint, format & tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff check)
+        run: ruff check .
+
+      - name: Format check (ruff format --check)
+        run: ruff format --check .
+
+      - name: Run tests (pytest)
+        run: pytest
+
+      - name: Smoke import - alle Module laden ohne Fehler
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, 'src')
+          from werkstatt_sync import config, excel_parser, planer, kalender_sync, orchestrator
+          print('All modules import cleanly')
+          "
+
+  # =========================================================================
+  # Build-Job: laeuft nur nach erfolgreichem Quality-Job
+  # Bei Tag-Push: Release-Asset. Sonst: Artifact (30 Tage).
+  # =========================================================================
+  build:
+    name: Build Windows EXE
+    needs: quality
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: pyinstaller werkstatt_sync.spec --noconfirm --clean
+
+      - name: Smoke-Test - EXE startet ohne Crash
+        shell: pwsh
+        run: |
+          $exe = ".\dist\WerkstattSync.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "EXE wurde nicht erstellt: $exe"
+            exit 1
+          }
+          $size = (Get-Item $exe).Length / 1MB
+          Write-Host "EXE-Groesse: $([math]::Round($size, 1)) MB"
+
+          # GUI starten und 6 Sekunden warten
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 6
+
+          if ($proc.HasExited) {
+            Write-Error "EXE ist mit ExitCode $($proc.ExitCode) abgestuerzt"
+            exit 1
+          }
+
+          Write-Host "EXE laeuft stabil. Beende sie..."
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "Smoke-Test bestanden."
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WerkstattSync-windows
+          path: dist/WerkstattSync.exe
+          retention-days: 30
+
+      - name: Attach to release (nur bei Tag-Push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WerkstattSync.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
