@@ -15,6 +15,7 @@ try:
 except ImportError:
     DND_VERFUEGBAR = False
 
+from . import __version__
 from .config import (
     DayConfig,
     format_zeitfenster,
@@ -31,6 +32,7 @@ from .kalender_sync import (
     token_vorhanden,
 )
 from .orchestrator import fuehre_sync_durch
+from .update_checker import pruefe_update_im_hintergrund
 
 WOCHENTAGE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
@@ -48,6 +50,21 @@ class WerkstattSyncApp:
 
         self._baue_ui()
         self._aktualisiere_status()
+        self._pruefe_update()
+
+    def _pruefe_update(self):
+        def _zeige_hinweis(neuester_tag: str):
+            self.root.after(
+                0,
+                lambda: messagebox.showinfo(
+                    "Update verfuegbar",
+                    f"Eine neue Version ist verfuegbar: {neuester_tag}\n"
+                    f"(Aktuell installiert: v{__version__})\n\n"
+                    "Bitte lade die neueste Version von GitHub herunter.",
+                ),
+            )
+
+        pruefe_update_im_hintergrund(__version__, _zeige_hinweis)
 
     def _baue_ui(self):
         notebook = ttk.Notebook(self.root)
