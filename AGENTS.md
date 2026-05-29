@@ -133,6 +133,7 @@ Ist kein Bug. Solange das Google-Projekt im Test-Modus ist, sehen Nutzer beim Lo
 - `pandas.read_excel` mit `header=1` weil Zeile 0 nur "Rechnungen" steht. Wenn Easywerkstatt das Export-Format aendert, ist das das Erste was bricht.
 - Notiz-Spalte heisst "Notizen", Komma als Dezimal-Trenner wird unterstuetzt
 - `KundenNr.` (mit Punkt!) — wenn das auch mal anders heisst, hier anpassen
+- **Easywerkstatt-XML-Bug**: Easywerkstatt erzeugt teilweise xlsx-Dateien mit ungueltigen Farbwerten (`rgb="0xffeca1"` statt `rgb="FFFFECA1"`). `openpyxl` bricht darauf hart ab mit "could not read stylesheet". Der Parser hat einen Reparatur-Fallback (`_repariere_styles_xml`) der die Datei in Memory umschreibt. Regressionstest: `tests/test_excel_parser.py::TestKaputteStyles`. Wenn Easywerkstatt weitere XML-Bugs einbaut, hier den Fix erweitern.
 
 ### `kalender_sync.alte_termine_loeschen` paginiert
 Google's `events().list()` gibt max 2500 Events pro Page. Wir paginieren mit `pageToken`. Wenn dein Kumpel mal sehr viele Auftraege hat: trotzdem ok, schreitet einfach durch Seiten.

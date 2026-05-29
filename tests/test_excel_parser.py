@@ -176,3 +176,29 @@ class TestEchteFixture:
         ohne_notiz = [a for a in auftraege if not a.hat_zeit_notiz]
         for a in ohne_notiz:
             assert a.dauer_stunden == 2.5
+
+
+# Regressionstest: Easywerkstatt erzeugt teilweise xlsx-Dateien mit kaputten
+# Style-Definitionen (rgb="0xffeca1" statt rgb="FFFFECA1"). Der Parser muss das
+# transparent reparieren koennen, sonst sehen User den haesslichen Fehler:
+# "could not read stylesheet ... invalid XML"
+@pytest.mark.skipif(
+    not (FIXTURES / "invoices_kaputte_styles.xlsx").exists(),
+    reason="fixtures/invoices_kaputte_styles.xlsx nicht vorhanden",
+)
+class TestKaputteStyles:
+    """Tests fuer den Reparatur-Fallback bei Easywerkstatt-Style-Bugs."""
+
+    def test_kaputte_datei_wird_trotzdem_eingelesen(self):
+        """Original-Easywerkstatt-Export mit 0x-Prefix in rgb-Attributen."""
+        auftraege = excel_einlesen(FIXTURES / "invoices_kaputte_styles.xlsx")
+        assert len(auftraege) > 0
+
+    def test_alle_spalten_korrekt_geparst(self):
+        """Auch mit Reparatur sollen alle Felder korrekte Werte haben."""
+        auftraege = excel_einlesen(FIXTURES / "invoices_kaputte_styles.xlsx")
+        for a in auftraege:
+            assert isinstance(a.nummer, int)
+            assert a.nummer > 0
+            assert isinstance(a.kunde, str)
+            assert a.dauer_stunden > 0
