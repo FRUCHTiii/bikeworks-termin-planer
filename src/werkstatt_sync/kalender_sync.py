@@ -110,13 +110,30 @@ def get_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def alte_termine_loeschen(service, cfg: AppConfig, log=print) -> int:
-    """Loescht alle vom Skript erstellten Termine ab jetzt.
+def alte_termine_loeschen(
+    service, cfg: AppConfig, ab_zeitpunkt: dt.datetime | None = None, log=print
+) -> int:
+    """Loescht alle vom Skript erstellten Termine ab dem gegebenen Zeitpunkt.
 
     Erkennt sie am cfg.termin_tag in der Beschreibung. Manuelle Termine
     bleiben unangetastet.
+
+    Args:
+        ab_zeitpunkt: Loesche Termine ab diesem Zeitpunkt (als naive lokale
+            Zeit oder mit Timezone). Default: jetzt.
+            Sollte mit dem Planungs-Startdatum uebereinstimmen, sonst
+            entstehen Duplikate (wenn die Planung in der Vergangenheit beginnt
+            und das Loeschen erst ab jetzt sucht).
     """
-    jetzt = dt.datetime.utcnow().isoformat() + "Z"
+    if ab_zeitpunkt is None:
+        ab_zeitpunkt = dt.datetime.now()
+
+    # Google-API erwartet ISO-Format mit Timezone-Info.
+    # Naive datetimes (Default vom Planer) werden als lokale Zeit interpretiert
+    # und in UTC umgerechnet. Bewusste Z-Strings einfach durchreichen.
+    if ab_zeitpunkt.tzinfo is None:
+        ab_zeitpunkt = ab_zeitpunkt.astimezone()  # haengt die lokale Timezone an
+    time_min = ab_zeitpunkt.replace(microsecond=0).isoformat()
 
     geloescht = 0
     page_token = None
@@ -125,7 +142,7 @@ def alte_termine_loeschen(service, cfg: AppConfig, log=print) -> int:
             service.events()
             .list(
                 calendarId=cfg.kalender_id,
-                timeMin=jetzt,
+                timeMin=time_min,
                 q=cfg.termin_tag,
                 maxResults=2500,
                 singleEvents=True,

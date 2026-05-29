@@ -6,7 +6,12 @@ import pytest
 
 from werkstatt_sync.config import AppConfig, DayConfig
 from werkstatt_sync.excel_parser import Auftrag
-from werkstatt_sync.planer import plane_auftraege, tages_slots
+from werkstatt_sync.planer import (
+    berechne_startzeitpunkt,
+    naechster_halbstunden_slot,
+    plane_auftraege,
+    tages_slots,
+)
 
 
 def make_auftrag(nummer: int, dauer: float = 1.0, hat_zeit: bool = True) -> Auftrag:
@@ -75,17 +80,13 @@ class TestPlanerSlotFuellung:
         assert len(mo) == 2
 
     def test_kein_aufteilen_ueber_slot_grenzen(self, cfg_default, montag):
-        """Ein 1.5h-Auftrag passt nicht in einen 1h-Rest -> naechster Slot."""
-        # Mo 9-11 = 2h Slot. Erst ein 1h Auftrag (9-10), dann ein 1.5h Auftrag.
-        # Der 1.5h-Auftrag wuerde nur noch 1h Platz haben (10-11), darf nicht
-        # aufgeteilt werden -> muss komplett auf Dienstag.
+        """Ein 1.5h-Auftrag passt nicht in 1h-Rest, KEIN Backfill verfuegbar -> naechster Slot."""
         auftraege = [make_auftrag(1, dauer=1.0), make_auftrag(2, dauer=1.5)]
         geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
 
         assert len(geplant) == 2
         assert geplant[0].start.date() == montag.date()
         assert geplant[0].start.hour == 9
-        # Auftrag 2 muss auf Dienstag verschoben sein
         assert geplant[1].start.date() == (montag + dt.timedelta(days=1)).date()
         assert geplant[1].start.hour == 9
 
@@ -191,3 +192,194 @@ class TestPlanerDauerEdgeCases:
 
         assert len(geplant) == 0
         assert len(ungeplant) == 1
+
+
+class TestNaechsterHalbstundenSlot:
+    """Tests fuer das Aufrunden auf 30/60-Minuten-Grenzen."""
+
+    def test_volle_stunde_bleibt(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 0, 0)) == dt.datetime(
+            2026, 6, 1, 14, 0
+        )
+
+    def test_halbe_stunde_bleibt(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 30, 0)) == dt.datetime(
+            2026, 6, 1, 14, 30
+        )
+
+    def test_eine_sekunde_nach_voll_geht_zur_halben(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 0, 1)) == dt.datetime(
+            2026, 6, 1, 14, 30
+        )
+
+    def test_14_29_geht_zur_halben(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 29)) == dt.datetime(
+            2026, 6, 1, 14, 30
+        )
+
+    def test_14_31_geht_zur_naechsten_vollen(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 31)) == dt.datetime(
+            2026, 6, 1, 15, 0
+        )
+
+    def test_14_59_geht_zur_naechsten_vollen(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 14, 59)) == dt.datetime(
+            2026, 6, 1, 15, 0
+        )
+
+    def test_23_31_geht_zum_naechsten_tag(self):
+        assert naechster_halbstunden_slot(dt.datetime(2026, 6, 1, 23, 31)) == dt.datetime(
+            2026, 6, 2, 0, 0
+        )
+
+
+class TestStartzeitpunkt:
+    def test_ab_morgen_ignoriert_uhrzeit(self):
+        cfg = AppConfig.default()
+        cfg.planung_ab_morgen = True
+        jetzt = dt.datetime(2026, 6, 1, 14, 37, 22)
+        ergebnis = berechne_startzeitpunkt(cfg, jetzt=jetzt)
+        assert ergebnis == dt.datetime(2026, 6, 2, 0, 0)
+
+    def test_ab_heute_nimmt_naechste_halbe_stunde(self):
+        cfg = AppConfig.default()
+        cfg.planung_ab_morgen = False
+        jetzt = dt.datetime(2026, 6, 1, 14, 12)
+        ergebnis = berechne_startzeitpunkt(cfg, jetzt=jetzt)
+        assert ergebnis == dt.datetime(2026, 6, 1, 14, 30)
+
+
+class TestPlanerStartetNichtInVergangenheit:
+    """Bug-Regression: erster Sync nachmittags hat rueckwirkend ab 8 Uhr geplant.
+
+    Loesung: start_datum kann mitten in einem Slot liegen und schneidet ihn an.
+    """
+
+    def test_start_mitten_im_slot_schneidet_ab(self):
+        # Mittwoch hat Slot 8-12 und 13-15
+        cfg = AppConfig.default()
+        # Start: Mittwoch 11:00 (mitten im ersten Slot)
+        start = dt.datetime(2026, 6, 3, 11, 0)
+        # 4 Auftraege je 0.5h
+        auftraege = [make_auftrag(i, dauer=0.5) for i in range(1, 5)]
+        geplant, _ = plane_auftraege(auftraege, cfg, start_datum=start)
+
+        # Erster Termin darf nicht vor 11:00 starten
+        assert geplant[0].start >= start
+        # Die ersten beiden landen im Slot 11:00-12:00
+        assert geplant[0].start == dt.datetime(2026, 6, 3, 11, 0)
+        assert geplant[1].start == dt.datetime(2026, 6, 3, 11, 30)
+        # Dann Mittagspause - naechster Termin ab 13:00
+        assert geplant[2].start == dt.datetime(2026, 6, 3, 13, 0)
+
+    def test_vorbei_an_allen_slots_geht_naechster_tag(self):
+        # Mittwoch 16:00, alle Slots heute (8-12, 13-15) vorbei
+        cfg = AppConfig.default()
+        start = dt.datetime(2026, 6, 3, 16, 0)
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg, start_datum=start)
+
+        # Donnerstag ist Neben-Tag (9-11)
+        assert geplant[0].start == dt.datetime(2026, 6, 4, 9, 0)
+
+    def test_start_in_mittagspause_geht_zum_nachmittag(self):
+        # Mittwoch 12:30 - in der Mittagspause
+        cfg = AppConfig.default()
+        start = dt.datetime(2026, 6, 3, 12, 30)
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg, start_datum=start)
+
+        assert geplant[0].start == dt.datetime(2026, 6, 3, 13, 0)
+
+
+class TestBackfill:
+    """Tests fuer das Backfill-Feature: kleinere Auftraege fuellen Reste."""
+
+    def test_kleiner_auftrag_fuellt_reste(self, cfg_default, montag):
+        # Mo 9-11 = 2h Slot. Reihenfolge:
+        # #3 (1.5h), #2 (1h), #1 (0.5h)
+        # Strikte FIFO: #3 nimmt 9-10:30, #2 passt nicht (nur 30 Min Rest),
+        # also: #1 (0.5h) wird vorgezogen und fuellt 10:30-11:00. #2 kommt Di.
+        auftraege = [
+            make_auftrag(3, dauer=1.5),
+            make_auftrag(2, dauer=1.0),
+            make_auftrag(1, dauer=0.5),
+        ]
+        geplant, ungeplant = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        mo_termine = [t for t in geplant if t.start.date() == montag.date()]
+        assert len(mo_termine) == 2
+        assert mo_termine[0].auftrag.nummer == 3
+        assert mo_termine[0].start.hour == 9
+        # #1 wurde vorgezogen, weil #2 nicht in 30-Min-Rest passt
+        assert mo_termine[1].auftrag.nummer == 1
+        assert mo_termine[1].start == dt.datetime(2026, 6, 1, 10, 30)
+        # #2 ist erst am Dienstag
+        di_termine = [t for t in geplant if t.start.date() != montag.date()]
+        assert di_termine[0].auftrag.nummer == 2
+
+    def test_keine_aenderung_wenn_alle_passen(self, cfg_default, montag):
+        """Wenn die natuerliche Reihenfolge passt, wird nichts umsortiert."""
+        auftraege = [make_auftrag(3, dauer=1.0), make_auftrag(2, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+        # Mo 9-11: #3 dann #2
+        assert geplant[0].auftrag.nummer == 3
+        assert geplant[1].auftrag.nummer == 2
+
+    def test_kein_passender_auftrag_slot_bleibt_teilweise_leer(self, cfg_default, montag):
+        """Wenn KEIN noch offener Auftrag in den Rest passt, bleibt der Rest leer."""
+        # Mo 9-11 = 2h Slot. Auftrag #3: 1.5h. Auftrag #2: 1h.
+        # #3 nimmt 9-10:30, #2 (1h) passt nicht in 30 Min Rest - kein kleinerer
+        # da, also bleibt 30 Min frei. #2 kommt am Dienstag.
+        auftraege = [make_auftrag(3, dauer=1.5), make_auftrag(2, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        mo_termine = [t for t in geplant if t.start.date() == montag.date()]
+        assert len(mo_termine) == 1
+        assert mo_termine[0].auftrag.nummer == 3
+        # #2 wandert auf Dienstag
+        di_termine = [t for t in geplant if t.start.date() != montag.date()]
+        assert di_termine[0].auftrag.nummer == 2
+
+    def test_reihenfolge_innerhalb_passender_kandidaten(self, cfg_default, montag):
+        """Bei mehreren passenden Kandidaten gewinnt der mit niedrigerem Index
+        (= hoechste Auftragsnummer = neuester)."""
+        # Mo 9-11 = 2h. Reihenfolge:
+        # #5 (1.5h), #4 (0.5h), #3 (0.5h)
+        # #5 nimmt 9-10:30. Rest 30 Min. Beide #4 und #3 passen.
+        # #4 hat den kleineren Index -> wird gewaehlt.
+        auftraege = [
+            make_auftrag(5, dauer=1.5),
+            make_auftrag(4, dauer=0.5),
+            make_auftrag(3, dauer=0.5),
+        ]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        mo_termine = [t for t in geplant if t.start.date() == montag.date()]
+        assert mo_termine[1].auftrag.nummer == 4  # nicht 3
+
+
+class TestUngeplantBehaeltOriginalReihenfolge:
+    def test_ungeplante_in_original_reihenfolge(self, montag):
+        # Nur Mo 9-10 Slot (1h), max_planungstage = 1 -> nur ein Tag
+        cfg = AppConfig(days={i: DayConfig([]) for i in range(7)})
+        cfg.days[0] = DayConfig([(9, 10)])
+        cfg.max_planungstage = 1
+
+        # Reihenfolge: 5 (2h), 4 (0.5h), 3 (1h), 2 (0.5h), 1 (1h)
+        # Slot ist 1h. 5 passt nicht (2h). 4 wird vorgezogen (0.5h passt).
+        # Rest 30 Min: 3 (1h) passt nicht, 2 (0.5h) passt -> 2.
+        # Slot voll. Rest: 5, 3, 1 ungeplant.
+        auftraege = [
+            make_auftrag(5, dauer=2.0),
+            make_auftrag(4, dauer=0.5),
+            make_auftrag(3, dauer=1.0),
+            make_auftrag(2, dauer=0.5),
+            make_auftrag(1, dauer=1.0),
+        ]
+        geplant, ungeplant = plane_auftraege(auftraege, cfg, start_datum=montag)
+
+        assert len(geplant) == 2
+        assert [t.auftrag.nummer for t in geplant] == [4, 2]
+        # Ungeplant in ORIGINAL-Reihenfolge (nicht: groesste zuerst)
+        assert [a.nummer for a in ungeplant] == [5, 3, 1]

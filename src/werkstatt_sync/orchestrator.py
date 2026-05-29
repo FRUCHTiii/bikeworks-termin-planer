@@ -14,7 +14,7 @@ from .kalender_sync import (
     get_service,
     termin_anlegen,
 )
-from .planer import plane_auftraege
+from .planer import berechne_startzeitpunkt, plane_auftraege
 
 
 @dataclass
@@ -66,9 +66,14 @@ def fuehre_sync_durch(
             len(auftraege), ohne_zeit, 0, 0, 0, fehler=f"Google-Login fehlgeschlagen: {e}"
         )
 
-    log("Loesche alte automatische Termine...")
+    # Startzeitpunkt EINMAL berechnen, dann fuer Loeschen UND Planen nutzen.
+    # Wenn diese auseinander laufen, entstehen Duplikate (siehe AGENTS.md).
+    start_datum = berechne_startzeitpunkt(cfg)
+    log(f"Planung startet: {start_datum.strftime('%a %d.%m.%Y %H:%M')}")
+
+    log("Loesche alte automatische Termine im Planungs-Zeitraum...")
     try:
-        geloescht = alte_termine_loeschen(service, cfg, log)
+        geloescht = alte_termine_loeschen(service, cfg, ab_zeitpunkt=start_datum, log=log)
     except Exception as e:
         return SyncErgebnis(
             len(auftraege), ohne_zeit, 0, 0, 0, fehler=f"Loeschen fehlgeschlagen: {e}"
@@ -76,7 +81,7 @@ def fuehre_sync_durch(
     log(f"-> {geloescht} alte Termine entfernt")
 
     log("Plane Auftraege...")
-    geplant, ungeplant = plane_auftraege(auftraege, cfg)
+    geplant, ungeplant = plane_auftraege(auftraege, cfg, start_datum=start_datum)
     if ungeplant:
         log(
             f"WARNUNG: {len(ungeplant)} Auftraege konnten in {cfg.max_planungstage} "
