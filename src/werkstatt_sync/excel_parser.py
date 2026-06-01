@@ -20,6 +20,7 @@ class Auftrag:
     betrag: str = ""
     notiz_original: str = ""  # Was im Notizfeld stand (zum Debuggen)
     hat_zeit_notiz: bool = False  # False -> Default-Dauer wurde verwendet
+    prioritaet: int = 0  # 0=normal, 1-4=P1-P4 (P1 wird zuerst eingeplant)
 
 
 def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list[Auftrag]:
@@ -27,6 +28,8 @@ def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list
 
     Sortiert nach Auftragsnummer aufsteigend (niedrigste = aelteste zuerst).
     Auftraege ohne Zeit-Notiz bekommen default_dauer_stunden.
+    Auftraege mit 'x' oder 'X' in der Notiz werden uebersprungen (nicht zurueckgegeben).
+    Auftraege mit 'P1'-'P4' in der Notiz erhalten eine Prioritaet (1=hoeher).
 
     Wirft FileNotFoundError oder ValueError bei Problemen.
     """
@@ -50,7 +53,11 @@ def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list
         notiz = row.get("Notizen")
         notiz_str = "" if pd.isna(notiz) else str(notiz)
 
+        if _ist_uebersprungen(notiz_str):
+            continue
+
         dauer, hat_zeit = _parse_dauer(notiz, default_dauer_stunden)
+        prio = _parse_prioritaet(notiz_str)
 
         kunde = row.get("Kundenname")
         if pd.isna(kunde) or not str(kunde).strip():
@@ -71,6 +78,7 @@ def excel_einlesen(pfad: str | Path, default_dauer_stunden: float = 1.0) -> list
                 betrag=betrag_str,
                 notiz_original=notiz_str,
                 hat_zeit_notiz=hat_zeit,
+                prioritaet=prio,
             )
         )
     return auftraege
@@ -146,6 +154,17 @@ def _parse_dauer(notiz, default: float) -> tuple[float, bool]:
         return dauer, True
     except (ValueError, TypeError):
         return default, False
+
+
+def _ist_uebersprungen(notiz: str) -> bool:
+    """True wenn die Notiz ein einzelnes 'x' oder 'X' enthaelt (Auftrag ueberspringen)."""
+    return bool(re.search(r"\bx\b", notiz, re.IGNORECASE))
+
+
+def _parse_prioritaet(notiz: str) -> int:
+    """Liest P1-P4 aus der Notiz. Gibt 0 zurueck wenn keine Prioritaet gesetzt."""
+    m = re.search(r"\bp([1-4])\b", notiz, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
 
 
 def _format_zahl(v, decimals: int = 0) -> str:

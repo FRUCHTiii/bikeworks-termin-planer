@@ -7,6 +7,8 @@ import pytest
 from werkstatt_sync.config import AppConfig, DayConfig
 from werkstatt_sync.excel_parser import Auftrag
 from werkstatt_sync.planer import (
+    _freie_dauer_bis,
+    _naechster_freier_zeitpunkt,
     berechne_startzeitpunkt,
     naechster_halbstunden_slot,
     plane_auftraege,
@@ -14,12 +16,15 @@ from werkstatt_sync.planer import (
 )
 
 
-def make_auftrag(nummer: int, dauer: float = 1.0, hat_zeit: bool = True) -> Auftrag:
+def make_auftrag(
+    nummer: int, dauer: float = 1.0, hat_zeit: bool = True, prioritaet: int = 0
+) -> Auftrag:
     return Auftrag(
         nummer=nummer,
         kunde=f"Kunde {nummer}",
         dauer_stunden=dauer,
         hat_zeit_notiz=hat_zeit,
+        prioritaet=prioritaet,
     )
 
 
@@ -383,3 +388,154 @@ class TestUngeplantBehaeltOriginalReihenfolge:
         assert [t.auftrag.nummer for t in geplant] == [4, 2]
         # Ungeplant in ORIGINAL-Reihenfolge (nicht: groesste zuerst)
         assert [a.nummer for a in ungeplant] == [5, 3, 1]
+
+
+class TestPrioritaet:
+    def test_p1_vor_normalem_auftrag(self, cfg_default, montag):
+        """Ein P1-Auftrag wird vor einem normalen Auftrag eingeplant."""
+        auftraege = [
+            make_auftrag(1, dauer=1.0, prioritaet=0),
+            make_auftrag(2, dauer=1.0, prioritaet=1),
+        ]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        assert geplant[0].auftrag.nummer == 2  # P1 zuerst
+        assert geplant[1].auftrag.nummer == 1
+
+    def test_p1_vor_p2_vor_p3_vor_p4_vor_normal(self, cfg_default, montag):
+        """Reihenfolge: P1 < P2 < P3 < P4 < normal."""
+        auftraege = [
+            make_auftrag(10, dauer=0.5, prioritaet=0),
+            make_auftrag(20, dauer=0.5, prioritaet=4),
+            make_auftrag(30, dauer=0.5, prioritaet=3),
+            make_auftrag(40, dauer=0.5, prioritaet=2),
+            make_auftrag(50, dauer=0.5, prioritaet=1),
+        ]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        nummern = [t.auftrag.nummer for t in geplant]
+        assert nummern == [50, 40, 30, 20, 10]
+
+    def test_gleiche_prio_behaelt_auftragsnummer_reihenfolge(self, cfg_default, montag):
+        """Innerhalb derselben Prioritaet bleibt die Auftrags-Reihenfolge erhalten."""
+        auftraege = [
+            make_auftrag(1, dauer=0.5, prioritaet=1),
+            make_auftrag(2, dauer=0.5, prioritaet=1),
+            make_auftrag(3, dauer=0.5, prioritaet=1),
+        ]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, start_datum=montag)
+
+        nummern = [t.auftrag.nummer for t in geplant]
+        assert nummern == [1, 2, 3]
+
+    def test_ungeplant_behaelt_original_reihenfolge_trotz_prio(self, montag):
+        """Ungeplante Auftraege kommen in Original-Reihenfolge zurueck, nicht Prio-Reihenfolge."""
+        cfg = AppConfig(days={i: DayConfig([]) for i in range(7)})
+        cfg.days[0] = DayConfig([(9, 10)])  # nur 1h Mo
+        cfg.max_planungstage = 1
+
+        auftraege = [
+            make_auftrag(1, dauer=1.0, prioritaet=0),
+            make_auftrag(2, dauer=1.0, prioritaet=1),
+        ]
+        geplant, ungeplant = plane_auftraege(auftraege, cfg, start_datum=montag)
+
+        assert len(geplant) == 1
+        assert geplant[0].auftrag.nummer == 2  # P1 wurde eingeplant
+        assert ungeplant[0].nummer == 1  # Original-Index 0 -> kommt zuerst
+
+
+class TestNaechsterFreierZeitpunkt:
+    def test_kein_belegt_gibt_ab_zurueck(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        assert _naechster_freier_zeitpunkt(ab, bis, []) == ab
+
+    def test_belegt_direkt_am_anfang(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        belegt = [(dt.datetime(2026, 6, 1, 9, 0), dt.datetime(2026, 6, 1, 10, 0))]
+        result = _naechster_freier_zeitpunkt(ab, bis, belegt)
+        assert result == dt.datetime(2026, 6, 1, 10, 0)
+
+    def test_mehrere_aufeinanderfolgende_belegte_zeiten(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 13, 0)
+        belegt = [
+            (dt.datetime(2026, 6, 1, 9, 0), dt.datetime(2026, 6, 1, 10, 0)),
+            (dt.datetime(2026, 6, 1, 10, 0), dt.datetime(2026, 6, 1, 11, 0)),
+        ]
+        result = _naechster_freier_zeitpunkt(ab, bis, belegt)
+        assert result == dt.datetime(2026, 6, 1, 11, 0)
+
+    def test_belegt_jenseits_bis_wird_ignoriert(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        belegt = [(dt.datetime(2026, 6, 1, 12, 0), dt.datetime(2026, 6, 1, 13, 0))]
+        result = _naechster_freier_zeitpunkt(ab, bis, belegt)
+        assert result == ab
+
+
+class TestFreieDauerBis:
+    def test_keine_blockierung(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        assert _freie_dauer_bis(ab, bis, []) == dt.timedelta(hours=2)
+
+    def test_blockierung_in_der_mitte(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        belegt = [(dt.datetime(2026, 6, 1, 10, 0), dt.datetime(2026, 6, 1, 11, 0))]
+        assert _freie_dauer_bis(ab, bis, belegt) == dt.timedelta(hours=1)
+
+    def test_blockierung_nach_bis_zaehlt_nicht(self):
+        ab = dt.datetime(2026, 6, 1, 9, 0)
+        bis = dt.datetime(2026, 6, 1, 11, 0)
+        belegt = [(dt.datetime(2026, 6, 1, 12, 0), dt.datetime(2026, 6, 1, 13, 0))]
+        assert _freie_dauer_bis(ab, bis, belegt) == dt.timedelta(hours=2)
+
+
+class TestBelegteZeiten:
+    def test_belegter_slot_wird_uebersprungen(self, cfg_default, montag):
+        """Wenn Mo 9-10 durch externen Termin belegt, startet erster Auftrag um 10."""
+        belegt = [(dt.datetime(2026, 6, 1, 9, 0), dt.datetime(2026, 6, 1, 10, 0))]
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, montag, belegte_zeiten=belegt)
+
+        assert len(geplant) == 1
+        assert geplant[0].start == dt.datetime(2026, 6, 1, 10, 0)
+
+    def test_belegung_mitten_im_slot_teilt_freie_zeit(self, montag):
+        """Mo 9-13 Slot, 10-11 belegt: Auftraege in 9-10 und 11-13."""
+        cfg = AppConfig(days={i: DayConfig([]) for i in range(7)})
+        cfg.days[0] = DayConfig([(9, 13)])
+        belegt = [(dt.datetime(2026, 6, 1, 10, 0), dt.datetime(2026, 6, 1, 11, 0))]
+
+        auftraege = [make_auftrag(1, dauer=1.0), make_auftrag(2, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg, montag, belegte_zeiten=belegt)
+
+        assert geplant[0].start == dt.datetime(2026, 6, 1, 9, 0)
+        assert geplant[0].ende == dt.datetime(2026, 6, 1, 10, 0)
+        assert geplant[1].start == dt.datetime(2026, 6, 1, 11, 0)
+        assert geplant[1].ende == dt.datetime(2026, 6, 1, 12, 0)
+
+    def test_ganzer_slot_belegt_geht_auf_naechsten_tag(self, cfg_default, montag):
+        """Wenn Mo 9-11 komplett durch externen Termin belegt, wird Di genutzt."""
+        belegt = [(dt.datetime(2026, 6, 1, 9, 0), dt.datetime(2026, 6, 1, 11, 0))]
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, montag, belegte_zeiten=belegt)
+
+        assert len(geplant) == 1
+        assert geplant[0].start.date() == (montag + dt.timedelta(days=1)).date()
+
+    def test_keine_ueberschneidung_mit_belegten_zeiten(self, cfg_default, montag):
+        """Kein geplanter Termin darf eine belegte Zeit ueberschneiden."""
+        belegt = [(dt.datetime(2026, 6, 1, 10, 0), dt.datetime(2026, 6, 1, 10, 30))]
+        auftraege = [make_auftrag(i, dauer=0.5) for i in range(1, 5)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, montag, belegte_zeiten=belegt)
+
+        for t in geplant:
+            for bs, be in belegt:
+                assert not (t.start < be and t.ende > bs), (
+                    f"Termin {t.start}-{t.ende} ueberschneidet belegte Zeit {bs}-{be}"
+                )

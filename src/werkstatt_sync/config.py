@@ -48,6 +48,7 @@ class AppConfig:
     zeitzone: str = "Europe/Berlin"
     termin_tag: str = "[EW-AUTO]"
     letzte_excel_datei: str = ""
+    alle_kalender_pruefen: bool = True  # Externe Termine in allen Kalendern beachten
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -86,6 +87,7 @@ class AppConfig:
             zeitzone=d.get("zeitzone", "Europe/Berlin"),
             termin_tag=d.get("termin_tag", "[EW-AUTO]"),
             letzte_excel_datei=d.get("letzte_excel_datei", ""),
+            alle_kalender_pruefen=d.get("alle_kalender_pruefen", True),
         )
 
 

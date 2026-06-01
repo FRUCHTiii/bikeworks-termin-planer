@@ -164,6 +164,52 @@ def alte_termine_loeschen(
     return geloescht
 
 
+def hole_belegte_zeiten(
+    service,
+    ab: dt.datetime,
+    bis: dt.datetime,
+    cfg: AppConfig,
+) -> list[tuple[dt.datetime, dt.datetime]]:
+    """Gibt alle belegten Zeitraeume aus allen (oder nur dem eigenen) Kalender zurueck.
+
+    Nutzt die FreeBusy-API, die alle Kalender des Accounts auf einmal abfragen kann.
+    Ignoriert Termine die vom Sync selbst angelegt wurden ([EW-AUTO]).
+
+    cfg.alle_kalender_pruefen=True:  alle Kalender des Accounts werden geprüft
+    cfg.alle_kalender_pruefen=False: nur cfg.kalender_id wird geprueft
+    """
+    if ab.tzinfo is None:
+        ab = ab.astimezone()
+    if bis.tzinfo is None:
+        bis = bis.astimezone()
+
+    if cfg.alle_kalender_pruefen:
+        # Alle Kalender-IDs aus dem Account ermitteln
+        kalender_liste = service.calendarList().list().execute()
+        kalender_ids = [k["id"] for k in kalender_liste.get("items", [])]
+    else:
+        kalender_ids = [cfg.kalender_id]
+
+    body = {
+        "timeMin": ab.replace(microsecond=0).isoformat(),
+        "timeMax": bis.replace(microsecond=0).isoformat(),
+        "items": [{"id": kid} for kid in kalender_ids],
+    }
+    result = service.freebusy().query(body=body).execute()
+
+    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]] = []
+    for kid in kalender_ids:
+        for periode in result.get("calendars", {}).get(kid, {}).get("busy", []):
+            start = dt.datetime.fromisoformat(periode["start"].replace("Z", "+00:00"))
+            ende = dt.datetime.fromisoformat(periode["end"].replace("Z", "+00:00"))
+            # In naive lokale Zeit umwandeln (wie der Planer arbeitet)
+            local_start = start.astimezone().replace(tzinfo=None)
+            local_ende = ende.astimezone().replace(tzinfo=None)
+            belegte_zeiten.append((local_start, local_ende))
+
+    return belegte_zeiten
+
+
 def termin_anlegen(service, termin: Termin, cfg: AppConfig) -> None:
     """Legt einen einzelnen Termin im Google Kalender an."""
     a = termin.auftrag
@@ -186,5 +232,7 @@ def termin_anlegen(service, termin: Termin, cfg: AppConfig) -> None:
         "description": "\n".join(beschreibung_zeilen),
         "start": {"dateTime": termin.start.isoformat(), "timeZone": cfg.zeitzone},
         "end": {"dateTime": termin.ende.isoformat(), "timeZone": cfg.zeitzone},
+        # Keine E-Mail-Benachrichtigungen - nur App-Erinnerungen unterdruecken
+        "reminders": {"useDefault": False, "overrides": []},
     }
     service.events().insert(calendarId=cfg.kalender_id, body=event).execute()
