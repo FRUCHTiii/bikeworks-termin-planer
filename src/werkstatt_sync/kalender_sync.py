@@ -203,10 +203,9 @@ def hole_belegte_zeiten(
             start = dt.datetime.fromisoformat(periode["start"].replace("Z", "+00:00"))
             ende = dt.datetime.fromisoformat(periode["end"].replace("Z", "+00:00"))
             # In naive lokale Zeit umwandeln (wie der Planer arbeitet)
-            belegte_zeiten.append((
-                start.astimezone().replace(tzinfo=None),
-                ende.astimezone().replace(tzinfo=None),
-            ))
+            local_start = start.astimezone().replace(tzinfo=None)
+            local_ende = ende.astimezone().replace(tzinfo=None)
+            belegte_zeiten.append((local_start, local_ende))
 
     return belegte_zeiten
 
