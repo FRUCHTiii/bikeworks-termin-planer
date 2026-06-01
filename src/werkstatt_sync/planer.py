@@ -156,7 +156,7 @@ def _naechster_freier_zeitpunkt(
     while changed:
         changed = False
         for belegt_start, belegt_ende in belegte_zeiten:
-            if belegt_start < bis and belegt_ende > ab:
+            if belegt_start <= ab and belegt_ende > ab:
                 ab = belegt_ende
                 changed = True
     return ab
