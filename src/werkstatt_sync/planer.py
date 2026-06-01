@@ -71,37 +71,32 @@ def plane_auftraege(
     auftraege: list[Auftrag],
     cfg: AppConfig,
     start_datum: dt.datetime | None = None,
+    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]] | None = None,
 ) -> tuple[list[Termin], list[Auftrag]]:
     """Verteilt Auftraege auf Slots gemaess Wochenplan.
 
-    Strategie: FIFO mit Backfill.
+    Strategie: FIFO mit Backfill. Auftraege mit Prioritaet (P1-P4) werden
+    vor normalen Auftraegen eingeplant (P1 vor P2 vor P3 vor P4 vor normal).
+    Innerhalb einer Prioritaetsstufe bleibt die Auftrags-Reihenfolge erhalten.
 
-    1. Die Auftrags-Reihenfolge wird grundsaetzlich respektiert (niedrigste Nummer
-       = aelteste = zuerst). Der naechste passende Auftrag wird in den naechsten
-       freien Platz gelegt.
-    2. WENN der naechste Auftrag NICHT in die Restzeit eines Slots passt, sucht
-       der Planer in den nachfolgenden Auftraegen einen, der passt (Backfill).
-       Erster passender gewinnt - das bleibt am naechsten an der Reihenfolge.
-    3. Aufgeteilt wird nie - ein Auftrag wandert immer als Ganzes in einen Slot.
-
-    Beispiel: Restzeit 30 Min. Naechster Auftrag #192 (1h) passt nicht. Statt den
-    Slot zu verschwenden, wird ein spaeterer 30-Min-Auftrag vorgezogen. Der
-    1h-Auftrag bleibt fuer den naechsten Slot reserviert.
-
-    Wenn start_datum mitten in einem Slot liegt (z.B. 11:00 bei Slot 8-12), wird
-    der Slot effektiv ab start_datum begonnen. Slots komplett in der Vergangenheit
-    werden uebersprungen.
+    belegte_zeiten: Liste von (start, ende) aus anderen Kalendern. Slots die
+    sich mit einem belegten Zeitraum ueberschneiden werden uebersprungen.
 
     Returns: (geplante_termine, ungeplante_auftraege - in Original-Reihenfolge)
     """
     if start_datum is None:
         start_datum = berechne_startzeitpunkt(cfg)
+    if belegte_zeiten is None:
+        belegte_zeiten = []
+
+    # Prioritaets-Sortierung: P1 zuerst, dann P2, P3, P4, dann normal (0).
+    # Stabile sort: Reihenfolge innerhalb gleicher Prio bleibt erhalten.
+    planungs_reihenfolge = sorted(
+        range(len(auftraege)),
+        key=lambda i: auftraege[i].prioritaet if auftraege[i].prioritaet > 0 else 999,
+    )
 
     geplant: list[Termin] = []
-    # Wir nutzen einen Index-basierten "remaining"-Ansatz: jeder Auftrag hat
-    # einen festen Index, und wir markieren "fertig geplant" durch eine
-    # parallele bool-Liste. So bleibt die Original-Reihenfolge der Liste
-    # erhalten fuer ungeplant-Output.
     erledigt = [False] * len(auftraege)
 
     for tag_offset in range(cfg.max_planungstage):
@@ -114,14 +109,18 @@ def plane_auftraege(
             if slot_start < start_datum:
                 slot_start = start_datum
             cursor = slot_start
-            # In dieser Schleife fuellen wir den Slot von vorne nach hinten.
-            # Bei jeder Iteration: nimm den ersten noch nicht erledigten
-            # Auftrag, der in (slot_ende - cursor) passt.
             while True:
-                rest = slot_ende - cursor
-                gewaehlt_idx = _waehle_naechsten_auftrag(auftraege, erledigt, rest)
+                # Cursor vorruecken falls aktueller Zeitpunkt durch externen
+                # Termin belegt ist.
+                cursor = _naechster_freier_zeitpunkt(cursor, slot_ende, belegte_zeiten)
+                if cursor >= slot_ende:
+                    break
+                rest = _freie_dauer_bis(cursor, slot_ende, belegte_zeiten)
+                gewaehlt_idx = _waehle_naechsten_auftrag(
+                    auftraege, erledigt, rest, planungs_reihenfolge
+                )
                 if gewaehlt_idx is None:
-                    break  # nichts passt mehr in diesen Slot
+                    break
                 a = auftraege[gewaehlt_idx]
                 dauer = dt.timedelta(hours=a.dauer_stunden)
                 geplant.append(Termin(auftrag=a, start=cursor, ende=cursor + dauer))
@@ -133,18 +132,44 @@ def plane_auftraege(
 
 
 def _waehle_naechsten_auftrag(
-    auftraege: list[Auftrag], erledigt: list[bool], max_dauer: dt.timedelta
+    auftraege: list[Auftrag],
+    erledigt: list[bool],
+    max_dauer: dt.timedelta,
+    reihenfolge: list[int],
 ) -> int | None:
-    """Sucht den ersten nicht-erledigten Auftrag, der in max_dauer passt.
-
-    "Erster" = niedrigster Index = niedrigste Auftragsnummer (Liste ist
-    aufsteigend sortiert). Damit bleibt die Reihenfolge so weit wie moeglich
-    erhalten - es wird nur uebersprungen, wenn der naechste Auftrag schlicht
-    nicht mehr passt.
-    """
-    for idx, (a, fertig) in enumerate(zip(auftraege, erledigt, strict=True)):
-        if fertig:
+    """Sucht den ersten nicht-erledigten Auftrag (gemaess reihenfolge), der in max_dauer passt."""
+    for idx in reihenfolge:
+        if erledigt[idx]:
             continue
-        if dt.timedelta(hours=a.dauer_stunden) <= max_dauer:
+        if dt.timedelta(hours=auftraege[idx].dauer_stunden) <= max_dauer:
             return idx
     return None
+
+
+def _naechster_freier_zeitpunkt(
+    ab: dt.datetime,
+    bis: dt.datetime,
+    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]],
+) -> dt.datetime:
+    """Schiebt 'ab' hinter alle belegten Zeitraeume, die ab ueberschneiden."""
+    changed = True
+    while changed:
+        changed = False
+        for belegt_start, belegt_ende in belegte_zeiten:
+            if belegt_start < bis and belegt_ende > ab:
+                ab = belegt_ende
+                changed = True
+    return ab
+
+
+def _freie_dauer_bis(
+    ab: dt.datetime,
+    bis: dt.datetime,
+    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]],
+) -> dt.timedelta:
+    """Gibt die Dauer vom Zeitpunkt 'ab' bis zum naechsten belegten Zeitraum (oder 'bis') zurueck."""
+    naechste_blockierung = bis
+    for belegt_start, belegt_ende in belegte_zeiten:
+        if belegt_start > ab and belegt_start < naechste_blockierung:
+            naechste_blockierung = belegt_start
+    return naechste_blockierung - ab

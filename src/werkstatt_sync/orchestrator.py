@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from .kalender_sync import (
     alte_termine_loeschen,
     credentials_vorhanden,
     get_service,
+    hole_belegte_zeiten,
     termin_anlegen,
 )
 from .planer import berechne_startzeitpunkt, plane_auftraege
@@ -80,8 +82,20 @@ def fuehre_sync_durch(
         )
     log(f"-> {geloescht} alte Termine entfernt")
 
+    log("Lese belegte Zeiten aus Google Kalender...")
+    ende_datum = start_datum + dt.timedelta(days=cfg.max_planungstage)
+    try:
+        belegte_zeiten = hole_belegte_zeiten(service, start_datum, ende_datum, cfg)
+        kalender_hinweis = "allen Kalendern" if cfg.alle_kalender_pruefen else cfg.kalender_id
+        log(f"-> {len(belegte_zeiten)} belegte Zeitraeume aus {kalender_hinweis} gefunden")
+    except Exception as e:
+        log(f"WARNUNG: Belegte Zeiten konnten nicht gelesen werden: {e}")
+        belegte_zeiten = []
+
     log("Plane Auftraege...")
-    geplant, ungeplant = plane_auftraege(auftraege, cfg, start_datum=start_datum)
+    geplant, ungeplant = plane_auftraege(
+        auftraege, cfg, start_datum=start_datum, belegte_zeiten=belegte_zeiten
+    )
     if ungeplant:
         log(
             f"WARNUNG: {len(ungeplant)} Auftraege konnten in {cfg.max_planungstage} "

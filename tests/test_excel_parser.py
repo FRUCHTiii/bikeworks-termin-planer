@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from werkstatt_sync.excel_parser import excel_einlesen
+from werkstatt_sync.excel_parser import _ist_uebersprungen, _parse_prioritaet, excel_einlesen
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -140,6 +140,90 @@ class TestExcelEinlesen:
         pd.DataFrame({"FalscheSpalte": [1, 2, 3]}).to_excel(pfad, index=False)
         with pytest.raises(ValueError, match="Auftragsnummer"):
             excel_einlesen(pfad)
+
+
+class TestUebersprungen:
+    def test_einzelnes_x_klein(self):
+        assert _ist_uebersprungen("x") is True
+
+    def test_einzelnes_x_gross(self):
+        assert _ist_uebersprungen("X") is True
+
+    def test_x_mit_leerzeichen(self):
+        assert _ist_uebersprungen("1.5 x") is True
+
+    def test_x_in_wort_wird_ignoriert(self):
+        assert _ist_uebersprungen("extra") is False
+        assert _ist_uebersprungen("max") is False
+        assert _ist_uebersprungen("1.5x") is False
+
+    def test_leere_notiz(self):
+        assert _ist_uebersprungen("") is False
+
+    def test_normaler_wert(self):
+        assert _ist_uebersprungen("2.0") is False
+        assert _ist_uebersprungen("P1") is False
+
+    def test_auftrag_mit_x_wird_gefiltert(self, tmp_path):
+        pfad = make_test_excel(
+            tmp_path,
+            [
+                {"Auftragsnummer": 1, "Kundenname": "A", "Notizen": "x"},
+                {"Auftragsnummer": 2, "Kundenname": "B", "Notizen": 1.0},
+                {"Auftragsnummer": 3, "Kundenname": "C", "Notizen": "X"},
+            ],
+        )
+        auftraege = excel_einlesen(pfad)
+        assert len(auftraege) == 1
+        assert auftraege[0].nummer == 2
+
+    def test_x_kombiniert_mit_anderen_zeichen(self, tmp_path):
+        """'1.5 x' soll uebersprungen werden."""
+        pfad = make_test_excel(
+            tmp_path,
+            [{"Auftragsnummer": 1, "Kundenname": "A", "Notizen": "1.5 x"}],
+        )
+        auftraege = excel_einlesen(pfad)
+        assert len(auftraege) == 0
+
+
+class TestPrioritaet:
+    def test_keine_prioritaet(self):
+        assert _parse_prioritaet("1.5") == 0
+        assert _parse_prioritaet("") == 0
+        assert _parse_prioritaet("extra") == 0
+
+    def test_p1_klein(self):
+        assert _parse_prioritaet("p1") == 1
+
+    def test_p1_gross(self):
+        assert _parse_prioritaet("P1") == 1
+
+    def test_alle_stufen(self):
+        for stufe in range(1, 5):
+            assert _parse_prioritaet(f"P{stufe}") == stufe
+
+    def test_p_in_wort_ignoriert(self):
+        assert _parse_prioritaet("P10") == 0  # kein Wortgrenze danach
+        assert _parse_prioritaet("1p1") == 0  # kein Wortgrenze davor
+
+    def test_p1_mit_dauer_kombiniert(self):
+        assert _parse_prioritaet("1.5 P1") == 1
+
+    def test_prioritaet_im_auftrag_korrekt(self, tmp_path):
+        pfad = make_test_excel(
+            tmp_path,
+            [
+                {"Auftragsnummer": 1, "Kundenname": "A", "Notizen": "P2"},
+                {"Auftragsnummer": 2, "Kundenname": "B", "Notizen": "1.5 P1"},
+                {"Auftragsnummer": 3, "Kundenname": "C", "Notizen": "1.0"},
+            ],
+        )
+        auftraege = excel_einlesen(pfad)
+        by_nr = {a.nummer: a for a in auftraege}
+        assert by_nr[1].prioritaet == 2
+        assert by_nr[2].prioritaet == 1
+        assert by_nr[3].prioritaet == 0
 
 
 # Optionaler Test gegen die echte Beispiel-Excel - laeuft nur lokal

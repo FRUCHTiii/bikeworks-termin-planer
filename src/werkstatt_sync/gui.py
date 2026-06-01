@@ -349,6 +349,21 @@ class WerkstattSyncApp:
             side="left", padx=(12, 0)
         )
 
+        row = ttk.Frame(sek2)
+        row.pack(fill="x", pady=3)
+        ttk.Label(row, text="", width=30).pack(side="left")
+        self.alle_kalender_var = tk.BooleanVar(value=self.cfg.alle_kalender_pruefen)
+        ttk.Checkbutton(
+            row,
+            text="Alle Google-Kalender auf bestehende Termine pruefen",
+            variable=self.alle_kalender_var,
+        ).pack(side="left")
+        ttk.Label(
+            row,
+            foreground="#666",
+            text=" (verhindert Doppelbelegung mit privaten Terminen)",
+        ).pack(side="left")
+
         # Speichern-Button fuer alle obigen Einstellungen
         ttk.Button(
             inner, text="Einstellungen speichern", command=self._einstellungen_speichern
@@ -412,6 +427,7 @@ class WerkstattSyncApp:
 
         self.cfg.kalender_id = self.kalender_id_var.get().strip() or "primary"
         self.cfg.planung_ab_morgen = self.ab_morgen_var.get()
+        self.cfg.alle_kalender_pruefen = self.alle_kalender_var.get()
 
         save_config(self.cfg)
         messagebox.showinfo("Gespeichert", "Einstellungen gespeichert.")
