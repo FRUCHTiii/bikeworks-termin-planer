@@ -169,7 +169,7 @@ def _freie_dauer_bis(
 ) -> dt.timedelta:
     """Gibt die Dauer vom Zeitpunkt 'ab' bis zum naechsten belegten Zeitraum (oder 'bis') zurueck."""
     naechste_blockierung = bis
-    for belegt_start, belegt_ende in belegte_zeiten:
+    for belegt_start, _belegt_ende in belegte_zeiten:
         if belegt_start > ab and belegt_start < naechste_blockierung:
             naechste_blockierung = belegt_start
     return naechste_blockierung - ab
