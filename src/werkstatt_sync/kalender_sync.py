@@ -172,10 +172,12 @@ def hole_belegte_zeiten(
 ) -> list[tuple[dt.datetime, dt.datetime]]:
     """Gibt alle belegten Zeitraeume aus allen (oder nur dem eigenen) Kalender zurueck.
 
-    Nutzt die FreeBusy-API, die alle Kalender des Accounts auf einmal abfragen kann.
-    Ignoriert Termine die vom Sync selbst angelegt wurden ([EW-AUTO]).
+    Kombiniert zwei Quellen:
+    1. FreeBusy-API fuer normale (zeitgebundene) Termine
+    2. Events-API fuer ganztaegige Termine (Urlaub etc.) - die FreeBusy-API
+       ignoriert ganztaegige Termine, daher muessen diese separat abgefragt werden.
 
-    cfg.alle_kalender_pruefen=True:  alle Kalender des Accounts werden geprüft
+    cfg.alle_kalender_pruefen=True:  alle Kalender des Accounts werden geprueft
     cfg.alle_kalender_pruefen=False: nur cfg.kalender_id wird geprueft
     """
     if ab.tzinfo is None:
@@ -184,28 +186,61 @@ def hole_belegte_zeiten(
         bis = bis.astimezone()
 
     if cfg.alle_kalender_pruefen:
-        # Alle Kalender-IDs aus dem Account ermitteln
         kalender_liste = service.calendarList().list().execute()
         kalender_ids = [k["id"] for k in kalender_liste.get("items", [])]
     else:
         kalender_ids = [cfg.kalender_id]
 
+    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]] = []
+
+    # 1. Zeitgebundene Termine via FreeBusy-API
     body = {
         "timeMin": ab.replace(microsecond=0).isoformat(),
         "timeMax": bis.replace(microsecond=0).isoformat(),
         "items": [{"id": kid} for kid in kalender_ids],
     }
     result = service.freebusy().query(body=body).execute()
-
-    belegte_zeiten: list[tuple[dt.datetime, dt.datetime]] = []
     for kid in kalender_ids:
         for periode in result.get("calendars", {}).get(kid, {}).get("busy", []):
             start = dt.datetime.fromisoformat(periode["start"].replace("Z", "+00:00"))
             ende = dt.datetime.fromisoformat(periode["end"].replace("Z", "+00:00"))
-            # In naive lokale Zeit umwandeln (wie der Planer arbeitet)
             local_start = start.astimezone().replace(tzinfo=None)
             local_ende = ende.astimezone().replace(tzinfo=None)
             belegte_zeiten.append((local_start, local_ende))
+
+    # 2. Ganztaegige Termine via Events-API (FreeBusy ignoriert diese)
+    time_min = ab.replace(microsecond=0).isoformat()
+    time_max = bis.replace(microsecond=0).isoformat()
+    for kid in kalender_ids:
+        page_token = None
+        while True:
+            result = (
+                service.events()
+                .list(
+                    calendarId=kid,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            for ev in result.get("items", []):
+                # Ganztaegige Termine haben 'date' statt 'dateTime'
+                if "date" not in ev.get("start", {}):
+                    continue
+                # EW-AUTO-Termine nicht als Blockierung werten
+                if cfg.termin_tag in (ev.get("description") or ""):
+                    continue
+                tag_start = dt.date.fromisoformat(ev["start"]["date"])
+                tag_ende = dt.date.fromisoformat(ev["end"]["date"])
+                # Google speichert Endtag exklusiv (Urlaub Mo-Fr: end=Sa)
+                block_start = dt.datetime.combine(tag_start, dt.time.min)
+                block_ende = dt.datetime.combine(tag_ende, dt.time.min)
+                belegte_zeiten.append((block_start, block_ende))
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
 
     return belegte_zeiten
 

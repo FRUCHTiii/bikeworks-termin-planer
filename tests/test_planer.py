@@ -539,3 +539,29 @@ class TestBelegteZeiten:
                 assert not (t.start < be and t.ende > bs), (
                     f"Termin {t.start}-{t.ende} ueberschneidet belegte Zeit {bs}-{be}"
                 )
+
+    def test_ganztaegiger_termin_blockiert_ganzen_tag(self, cfg_default, montag):
+        """Ein ganztaegiger Termin (z.B. Urlaub) blockiert den gesamten Tag.
+
+        Ganztaegige Termine werden als (00:00, 00:00 naechster Tag) uebergeben,
+        genau wie hole_belegte_zeiten() sie aus der Events-API aufbereitet.
+        """
+        # Montag komplett blockiert (Urlaub)
+        belegt = [(dt.datetime(2026, 6, 1, 0, 0), dt.datetime(2026, 6, 2, 0, 0))]
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, montag, belegte_zeiten=belegt)
+
+        assert len(geplant) == 1
+        # Muss auf Dienstag ausweichen
+        assert geplant[0].start.date() == (montag + dt.timedelta(days=1)).date()
+
+    def test_mehrtaegiger_urlaub_blockiert_alle_tage(self, cfg_default, montag):
+        """Mehrtagiger Urlaub (Mo-Mi) blockiert alle betroffenen Arbeitstage."""
+        # Mo bis Mi blockiert (end-Datum exklusiv: Do 00:00)
+        belegt = [(dt.datetime(2026, 6, 1, 0, 0), dt.datetime(2026, 6, 4, 0, 0))]
+        auftraege = [make_auftrag(1, dauer=1.0)]
+        geplant, _ = plane_auftraege(auftraege, cfg_default, montag, belegte_zeiten=belegt)
+
+        assert len(geplant) == 1
+        # Donnerstag ist der naechste freie Tag
+        assert geplant[0].start.date() == dt.date(2026, 6, 4)
